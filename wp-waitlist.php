@@ -10,6 +10,35 @@
  * Domain Path: /languages
  */
 
+function time_elapsed_string($datetime, $full = false) {
+    $now = new DateTime;
+    $ago = new DateTime($datetime);
+    $diff = $now->diff($ago);
+
+    $diff->w = floor($diff->d / 7);
+    $diff->d -= $diff->w * 7;
+
+    $string = array(
+        'y' => 'año',
+        'm' => 'mes',
+        'w' => 'semana',
+        'd' => 'día',
+        'h' => 'hora',
+        'i' => 'minutos',
+        's' => 'segundos',
+    );
+    foreach ($string as $k => &$v) {
+        if ($diff->$k) {
+            $v = $diff->$k . ' ' . $v . ($diff->$k > 1 ? 's' : '');
+        } else {
+            unset($string[$k]);
+        }
+    }
+
+    if (!$full) $string = array_slice($string, 0, 1);
+    return $string ? implode(', ', $string) . ' ' : ' un momento';
+}
+
 class WP_Waitlist {
     private $prefix = 'wp-waitlist_';
 
@@ -62,21 +91,43 @@ class WP_Waitlist {
         $lists = get_post_meta($post->ID, $this->prefix . 'lists', true);
         if (empty($lists)) { return $content; } // Don't run if there is no waitlist info for this post.
         $html = '';
+        $no_show = get_post_meta($post->ID,'no_show',true);
+        if ($no_show == 0 || $no_show === NULL && get_post_type() == 'wl-restaurantes') {
         if (!post_password_required($post->ID)) {
             $current_user_id = get_current_user_id();
             if (0 === $current_user_id) { // No user is logged in.
                 $html .= '<p>';
                 $html .= sprintf(
-                    esc_html__('%1$s with your account in order to be able to join "%2$s" lists!', 'wp-waitlist'),
+                    esc_html__('Necesitas %1$s con tu cuenta para poder formarte en "%2$s"!', 'wp-waitlist'),
                     wp_loginout(get_permalink($post->ID), false),
                     $post->post_title
                 );
                 $html .= '</p>';
-            } else {
+                $html .= '<div>';
+                $html .= '<p>';
+                $html .= '<a type="button" class="btn btn-info" href="https://sinco.la/registro/#Registro">Regístrarme</a>';
+                $html .= '</p>';
+                $html .= '</div>';
+                $html .= '<div>';
+                $html .= '<p>';
+                $html .= '<a type="button" class="btn btn-info" href="https://sinco.la/formarse/#Invitado">Hacer fila sin registrarme...</a>';
+                $html .= '</p>';
+                $html .= '</div>';
+            } /*elseif(current_user_can('administrator' && 'editor')) {
+                $getUsers = $this->renderListedUsersList($post_id,$post_title);
+                if (!empty($getUsers)) {
+                    echo $getUsers;
+                } else {
+                    echo "empty users";
+                }
+            }*/ else {
                 $permalink = get_permalink($post->ID);
                 $html .= '<ul class="' . $this->prefix . '-join-leave-button-list">';
                 foreach ($lists as $list) {
-                    $html .= '<li><form action="' . $permalink . '">';
+                    $user_ids = $this->getUsersOnList($post->ID, $list['name']);
+                    $inputGuests = "$this->prefix".$current_user_id."_single_guests";
+                    $html .= "<li>Total de usuarios esperando: ".count($user_ids)."</li>";
+                    $html .= '<li><form method="GET" action="' . $permalink . '">';
                     // If a blog isn't using pretty permalinks, this form (being an HTTP GET)
                     // overrides the query string in the `action` attribute, so add the permalink manually.
                     $x = get_option('permalink_structure');
@@ -92,7 +143,7 @@ class WP_Waitlist {
                     if (in_array($current_user_id, $user_ids)) {
                         // User is currently listed, so make a "Leave List" button.
                         $html .= '<input type="hidden" name="' . $this->prefix . 'action" value="leave" />';
-                        $html .= '<input type="submit" value="' . sprintf(esc_attr__('Leave "%s" List', 'wp-waitlist'), $list['name']) . '" />';
+                        $html .= '<input type="submit" value="' . sprintf(esc_attr__('Dejar de esperar en "%s"', 'wp-waitlist'), $list['name']) . '" />';
                     } else {
                         // User is not on this list, so make a "Join List" button,
                         $html .= '<input type="hidden" name="' . $this->prefix . 'action" value="join" />';
@@ -101,7 +152,8 @@ class WP_Waitlist {
                         if (!empty($list['max']) && count($user_ids) >= $list['max']) {
                             $btn_text = esc_attr__('Join waitlist for "%s" list', 'wp-waitlist');
                         } else {
-                            $btn_text = esc_attr('Join "%s" list', 'wp-waitlist');
+                            $html .= '<input id="single_guests" placeholder="Número de invitad@s" type="number" name="'.$inputGuests.'" />';
+                            $btn_text = esc_attr('Esperar en la fila "%s"', 'wp-waitlist');
                         }
                         $html .= '<input type="submit" value="' . sprintf($btn_text, $list['name']) . '" />';
                     }
@@ -109,6 +161,7 @@ class WP_Waitlist {
                 }
                 $html .= '</ul>';
             }
+        }
         }
         return $content . $html;
     }
@@ -125,6 +178,14 @@ class WP_Waitlist {
                     if ($this->addUserToList($user_id, $post->ID, $_REQUEST[$this->prefix . 'list_name'])) {
                         // TODO:
                         //$this->addNoticeOfListedUser($user_id, $post->ID, $_REQUEST[$this->prefix . 'list_name']);
+                        $inputGuests = "$this->prefix".$current_user_id."_single_guests";
+                        $requertGuests = $_REQUEST[$this->prefix.$current_user_id.'_single_guests'];
+                        if ( isset( $requertGuests ) ) {
+                        add_post_meta($post->ID, $inputGuests, $requertGuests, true);
+                        if ( !add_post_meta($post->ID, $inputGuests, $requertGuests, true) ) { 
+                            update_post_meta($post->ID, $inputGuests, $requertGuests);
+                        } else { add_post_meta($post->ID, $inputGuests, $requertGuests, true); }
+                        } else { echo "Ha ocurrido un error obteniendo el número de invitados."; }
                     }
                     break;
                 case 'leave':
@@ -180,7 +241,7 @@ class WP_Waitlist {
     public function addMetaBox ($post_type, $post) {
         add_meta_box(
             $this->prefix . 'lists-meta-box',
-            __('Waitlist Details', 'wp-waitlist'),
+            __('Listas de espera - Digitalab', 'wp-waitlist'),
             array($this, 'renderMetaBox'),
             $post_type, // TODO: Parameterize this so people can choose which post types this applies to.
             'normal'
@@ -189,6 +250,7 @@ class WP_Waitlist {
 
     private function renderWaitlistsTable ($data = array()) {
         global $post;
+        if( get_post_type() == 'wl-restaurantes' ) {
         // Set empty condition and condition parameter defaults.
         if (empty($data)) {
             $data[0] = array(
@@ -202,10 +264,10 @@ class WP_Waitlist {
     <thead>
         <tr>
             <th>
-                <?php esc_html_e('Waitlist', 'wp-waitlist');?>
+                <?php esc_html_e('Lista', 'wp-waitlist');?>
             </th>
             <th>
-                <?php esc_html_e('Waitlist properties', 'wp-waitlist');?>
+                <?php esc_html_e('Propiedades', 'wp-waitlist');?>
             </th>
         </tr>
     </thead>
@@ -213,30 +275,30 @@ class WP_Waitlist {
         <?php for ($i = 0; $i < count($data); $i++) : ?>
         <tr id="<?php esc_attr_e($this->prefix);?>list-<?php esc_attr_e($i);?>">
             <td>
-                <p><label><?php esc_html_e('List name:', 'wp-waitlist');?><br />
+                <p><label><?php esc_html_e('Nombre de lista:', 'wp-waitlist');?><br />
                     <input
                         name="<?php esc_attr_e($this->prefix)?>list[<?php esc_attr_e($i);?>][name]"
                         value="<?php esc_attr_e($data[$i]['name']);?>"
                     />
                 </label></p>
-                <p><a href="#TK" class="button <?php esc_attr_e($this->prefix);?>list-remove"><?php esc_html_e('Remove waitlist', 'wp-waitlist');?></a></p>
+                <p><a href="#TK" class="button <?php esc_attr_e($this->prefix);?>list-remove"><?php esc_html_e('Quitar Lista de espera', 'wp-waitlist');?></a></p>
             </td>
             <td>
                 <fieldset id="<?php esc_attr_e($this->prefix);?>list-<?php esc_attr_e($i);?>" class="<?php esc_attr_e($this->prefix);?>list-parameters">
                     <legend><?php esc_html_e('List properties', 'wp-waitlist');?></legend>
                     <label><?php print sprintf(
-                        esc_html__('Waitlist users after the first %s have already joined.', 'wp-waitlist'),
+                        esc_html__('La lista podrá registrar hasta %s usuarios.', 'wp-waitlist'),
                         '<input type="number" name="' . esc_attr($this->prefix) . 'list[' . esc_attr($i) . '][max]" value="' . esc_attr($data[$i]['max']) . '" placeholder="number" min="1" />'
                     );?></label> 
                 </fieldset>
                 <div id="<?php esc_attr_e($this->prefix)?>list-users-<?php esc_attr_e($i);?>">
-                    <p><?php esc_html_e('Users on this list:', 'wp-waitlist');?></p>
+                    <p><?php esc_html_e('Usuarios en esta lista', 'wp-waitlist');?></p>
                     <ul>
                         <li>Joined:
-                            <?php $this->renderListedUsersList($post->ID, $data[$i]['name'])?>
+                            <?php $joineds = $this->renderListedUsersList($post->ID, $data[$i]['name']); echo $joineds; ?>
                         </li>
                         <li>Waitlisted:
-                            <?php $this->renderWaitlistedUsersList($post->ID, $data[$i]['name'])?>
+                            <?php $waitlisteds = $this->renderWaitlistedUsersList($post->ID, $data[$i]['name']); echo $waitlisteds; ?>
                         </li>
                     </ul>
                 </div>
@@ -244,36 +306,31 @@ class WP_Waitlist {
 <!--
                 <label>
                     <input type="checkbox"
-                        <?php if (isset($data[$i]['active'])) { print 'checked="checked"'; }?>
-                        name="<?php esc_attr_e($this->prefix);?>list[<?php esc_attr_e($i);?>][active]"
-                        value="1" /> <?php esc_html_e('Active', 'wp-waitlist');?>
+                        <?php // if (isset($data[$i]['active'])) { print 'checked="checked"'; }?>
+                        name="<?php // esc_attr_e($this->prefix);?>list[<?php // esc_attr_e($i);?>][active]"
+                        value="1" /> <?php // esc_html_e('Active', 'wp-waitlist');?>
                 </label>
 -->
             </td>
         </tr>
         <?php endfor; ?>
     </tbody>
-    <tfoot>
-        <tr>
-            <td colspan="2"><a href="#TK" id="<?php esc_attr_e($this->prefix);?>list-new" class="button"><?php esc_html_e('Add another waitlist', 'wp-waitlist');?></a></td>
-        </tr>
-    </tfoot>
 </table>
 <?php
-    }
+    }}
 
     public function renderMetaBox ($post) {
         wp_nonce_field('editing_' . $this->prefix . 'list', $this->prefix . 'meta_box_nonce');
         $lists = get_post_meta($post->ID, $this->prefix . 'lists', true);
 ?>
-<fieldset><legend>Manage Waitlists</legend>
+<fieldset>
     <p><label>
         <input type="checkbox"
             id="<?php print esc_attr($this->prefix . 'enabled');?>"
             name="<?php print esc_attr($this->prefix . 'enabled');?>"
             <?php (!empty($lists)) ? print 'checked="checked"': '';?>
             />
-        <?php esc_html_e('Enable WP-Waitlist for this post?', 'wp-waitlist');?>
+        <?php esc_html_e('¿Activar Listas de espera?', 'wp-waitlist');?>
     </label></p>
     <?php $this->renderWaitlistsTable(get_post_meta($post->ID, $this->prefix . 'lists', true));?>
 </fieldset>
@@ -309,11 +366,15 @@ class WP_Waitlist {
     public function getUsersOnList ($post_id, $list_name = '') {
         // Start with an underscore to tell WordPress to hide this field from default custom field UI.
         $user_ids = get_post_meta($post_id, '_' . $this->prefix . 'users_listed_on_' . $list_name . '_list');
-
+        //var_dump($user_ids);
         // Sort by join time.
         $arr_join_times = array();
+        if (is_array($user_ids)) {
         foreach ($user_ids as $user_id) {
             $arr_join_times[$user_id] = $this->getListJoinTime($post_id, $user_id, $list_name);
+        }
+        } else {
+            $arr_join_times[$user_ids] = $this->getListJoinTime($post_id, $user_ids, $list_name);
         }
         asort($arr_join_times);
 
@@ -335,6 +396,12 @@ class WP_Waitlist {
     public function getListedUsers ($post_id, $list_name = '') {
         $users = $this->getUsersOnList($post_id, $list_name);
         $list_props = $this->getListProperties($post_id, $list_name);
+        //echo "<p>ID ";
+        //print_r($user_id);
+        //echo " Registrado hace ";
+        //$datePerUser = date("Y-m-d H:i:s", $arr_join_times[$users]);
+        //echo time_elapsed_string($datePerUser);
+        //echo "</p>";
         return array_slice($users, 0, $list_props['max']);
     }
 
@@ -348,7 +415,15 @@ class WP_Waitlist {
     public function getWaitlistedUsers ($post_id, $list_name = '') {
         $users = $this->getUsersOnList($post_id, $list_name);
         $list_props = $this->getListProperties($post_id, $list_name);
-        return array_slice($users, $list_props['max']);
+        if (!empty($users)){
+            //return array_slice($users, $list_props['max']);
+            foreach ($users as $user) {
+                return $user;
+            }
+            foreach ($list_props as $list_props) {
+                return $list_props;
+            }
+        }
     }
 
     public function getListJoinTime ($post_id, $user_id, $list_name = '') {
@@ -376,17 +451,22 @@ class WP_Waitlist {
     }
 
     private function removeUserFromList ($user_id, $post_id, $list_name = '') {
-        return delete_post_meta($post_id, '_' . $this->prefix . 'users_listed_on_' . $list_name . '_list', $user_id);
+        $deleteFromList = delete_post_meta($post_id, '_' . $this->prefix . 'users_listed_on_' . $list_name . '_list', $user_id);
+        $deleteFromGuests = delete_post_meta($post->ID, $this->prefix.$current_user_id.'_single_guests');
+        $deleteUser = $deleteFromList.$deleteFromGuests;
+        return $deleteUser;
     }
 
     private function renderUserList ($post_id, $user_ids, $list_name) {
         print '<ol>';
-        foreach ($user_ids as $user_id) {
+        if (is_array($user_ids) || is_object($user_ids)) {
+            foreach ($user_ids as $user_id) {
             $user = get_user_by('id', $user_id);
             print '<li>';
             print '<a href="' . admin_url('/profile.php?uid=' . esc_attr($user_id)) . '">' . esc_html($user->display_name) . '</a>';
             print ' ' . esc_html__('joined on', 'wp-waitlist') . ' ' . date(get_option('date_format'), $this->getListJoinTime($post_id, $user_id, $list_name));
             print '</li>';
+            }
         }
         print '</ol>';
     }
@@ -493,6 +573,33 @@ class WP_Waitlist {
         flush_rewrite_rules();
     }
 
-}
+    public function Wait_lists($post_id) {
+    // Get an array of all lists that the author of this post created.
+        $lists = $this->getListsForPost($post_id);
 
+    // You can iterate through the lists attached to this post.
+        foreach ($lists as $list_name) {
+
+            $list_properties = $this->getListProperties($post_id, $list_name);
+            foreach ($list_properties as $property_name => $property_value) {
+                print "$property_name is $property_value <br />";
+            }
+            // You can also learn which users are on the list...
+            $user_ids = $this->getListedUsers($post_id, $list_name);
+            
+            foreach ($user_ids as $id) {
+                $this_wp_user = get_userdata($id); // $this_wp_user is now a WP_User object.
+                //var_dump($id);
+            }
+
+            // ...and which users have been waitlisted (joined after the list reached capacity).
+            $waitlisted_users = $this->getWaitlistedUsers($post_id, $list_name);
+            // You can also get an array all users who have added themselves to the list, sorted by date.
+            $all_user_ids_on_list = $this->getUsersOnList($post_id, $list_name);
+        }
+
+    }
+
+}
+global $WP_Waitlist;
 $WP_Waitlist = new WP_Waitlist();
